@@ -18,7 +18,7 @@ def main():
         diffusion,
         "data\\thin_film.csv",
         train_batch_size=8,
-        train_lr=2e-5,
+        train_lr=8e-5,
         train_num_steps=700000,
         gradient_accumulate_every=4,
         ema_decay=0.995,
