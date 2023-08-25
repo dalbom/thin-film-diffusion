@@ -12,7 +12,7 @@ import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from accelerate import Accelerator
 from ema_pytorch import EMA
-from PIL import Image
+from PIL import Image, ImageOps
 from pytorch_fid.inception import InceptionV3
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset
@@ -335,7 +335,8 @@ class ConditionedDataset(Dataset):
         return len(self.filepaths)
 
     def __getitem__(self, index):
-        img = Image.open(self.filepaths[index])
+        img = Image.open(self.filepaths[index])  # .convert("RGB")
+        img = ImageOps.invert(img)
 
         return self.transform(img), torch.Tensor(self.measurements[index])
 
