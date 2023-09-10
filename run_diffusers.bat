@@ -1,16 +1,17 @@
-python custom_diffusers\train.py ^
+python train.py ^
     --dataset_name thin_film ^
-    --output_dir results\diffusers_512 ^
-    --resolution 512 ^
-    --train_batch_size 2 ^
-    --eval_batch_size 2 ^
+    --output_dir results\diffusers_256_wo_normalize ^
+    --resolution 256 ^
+    --train_batch_size 8 ^
+    --eval_batch_size 4 ^
     --dataloader_num_workers 0 ^
     --num_epochs 1000 ^
     --save_images_epochs 5 ^
     --save_model_epochs 5 ^
-    --gradient_accumulation_steps 8 ^
+    --gradient_accumulation_steps 2 ^
     --learning_rate 1e-4 ^
     --use_ema ^
+    --logger tensorboard ^
     --cache_dir c:\\dev\\dev\\.cache ^
     --checkpointing_steps 5000 ^
     --enable_xformers_memory_efficient_attention

@@ -1,5 +1,6 @@
-import cv2
 import os
+
+import cv2
 import numpy as np
 
 
@@ -31,8 +32,20 @@ def enlarge_results(workdir, fx, fy, samples_per_row, buffer=20):
 
 
 def main():
-    enlarge_results("results\\diffusers", 2 * 3.196870925684485, 2, 4)
-    enlarge_results("results\\diffusers_512", 3.196870925684485, 1, 2)
+    # enlarge_results("results\\diffusers", 2 * 3.196870925684485, 2, 4)
+    # enlarge_results("results\\diffusers_512", 3.196870925684485, 1, 2)
+    # enlarge_results(
+    #     "results\\diffusers_256_wo_normalize",
+    #     fx=3.2,
+    #     fy=1,
+    #     samples_per_row=4,
+    # )
+    enlarge_results(
+        "results\\diffusers_128_wo_normalize",
+        fx=6.4,
+        fy=2,
+        samples_per_row=4,
+    )
 
 
 if __name__ == "__main__":

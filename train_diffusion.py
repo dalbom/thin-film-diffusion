@@ -10,21 +10,14 @@ from typing import Optional
 
 import accelerate
 import datasets
+import diffusers
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator, InitProcessGroupKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
 from datasets import load_dataset
-from huggingface_hub import HfFolder, Repository, create_repo, whoami
-from packaging import version
-from torchvision import transforms
-from tqdm.auto import tqdm
-
-import diffusers
 from diffusers import DDPMScheduler
-from pipeline import ConditionalPipeline
-from unet import ConditionalUNet
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import (
@@ -34,8 +27,15 @@ from diffusers.utils import (
     is_wandb_available,
 )
 from diffusers.utils.import_utils import is_xformers_available
-from thin_film_dataset import Crop
+from huggingface_hub import HfFolder, Repository, create_repo, whoami
+from packaging import version
 from PIL import Image
+from torchvision import transforms
+from tqdm.auto import tqdm
+
+from data.thin_film_dataset import Crop
+from model.pipeline import ConditionalPipeline
+from model.unet import ConditionalUNet
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.21.0.dev0")
@@ -556,7 +556,7 @@ def main(args):
     # download the dataset.
     if args.dataset_name is not None:
         dataset = load_dataset(
-            "custom_diffusers\\thin_film_dataset.py",
+            "data\\thin_film_dataset.py",
             split="train",
         )
     else:
@@ -694,6 +694,9 @@ def main(args):
             disable=not accelerator.is_local_main_process,
         )
         progress_bar.set_description(f"Epoch {epoch}")
+
+        accumulated_loss = 0.0
+
         for step, batch in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
             if (
@@ -803,15 +806,22 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {
-                "loss": loss.detach().item(),
-                "lr": lr_scheduler.get_last_lr()[0],
-                "step": global_step,
-            }
-            if args.use_ema:
-                logs["ema_decay"] = ema_model.cur_decay_value
-            progress_bar.set_postfix(**logs)
-            accelerator.log(logs, step=global_step)
+            accumulated_loss += loss.detach().item()
+
+            if (step + 1) % args.gradient_accumulation_steps == 0:
+                average_loss = accumulated_loss / args.gradient_accumulation_steps
+                logs = {
+                    "loss": average_loss,
+                    "lr": lr_scheduler.get_last_lr()[0],
+                    "step": global_step,
+                }
+                if args.use_ema:
+                    logs["ema_decay"] = ema_model.cur_decay_value
+                progress_bar.set_postfix(**logs)
+                accelerator.log(logs, step=global_step)
+
+                accumulated_loss = 0.0  # reset accumulated loss
+
         progress_bar.close()
 
         accelerator.wait_for_everyone()

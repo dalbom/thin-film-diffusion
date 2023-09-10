@@ -1,18 +1,16 @@
 import datasets
-import pandas as pd
-from datasets import (
-    GeneratorBasedBuilder,
-    Features,
-    SplitGenerator,
-    DatasetInfo,
-    Value,
-    Sequence,
-)
 import numpy as np
-import PIL
+import pandas as pd
 import torch
-import torchvision.transforms as T
 import torchvision.transforms.functional as TF
+from datasets import (
+    DatasetInfo,
+    Features,
+    GeneratorBasedBuilder,
+    Sequence,
+    SplitGenerator,
+    Value,
+)
 
 
 class Crop(torch.nn.Module):
@@ -55,6 +53,20 @@ class ThinFilmDataset(GeneratorBasedBuilder):
             ),
             axis=1,
         )
+
+        # self.measurements = np.stack(
+        #     (
+        #         data["x1"],
+        #         data["x2"],
+        #         data["x3"],
+        #         data["x4"],
+        #         data["x5"],
+        #         data["x6"],
+        #         data["x7"],
+        #         data["x8"],
+        #     ),
+        #     axis=1,
+        # )
 
         return [
             SplitGenerator(

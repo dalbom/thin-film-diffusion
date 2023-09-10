@@ -1,9 +1,10 @@
-from diffusers import UNet2DModel
-from diffusers.models.unet_2d import UNet2DOutput
-import torch.nn as nn
-import torch
 from typing import Optional, Tuple, Union
+
+import torch
+import torch.nn as nn
+from diffusers import UNet2DModel
 from diffusers.configuration_utils import register_to_config
+from diffusers.models.unet_2d import UNet2DOutput
 
 
 class ConditionalUNet(UNet2DModel):
