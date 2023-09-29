@@ -114,7 +114,7 @@ model.fc = nn.Linear(model.fc.in_features, 8)  # Customize for regression output
 
 # Loss function, optimizer and accelerator
 criterion = nn.MSELoss()
-optimizer = optim.AdamW(model.parameters(), lr=1e-4)
+optimizer = optim.AdamW(model.parameters(), lr=2e-5)
 
 current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 project_dir = f"results\\regression\\{current_time}"
