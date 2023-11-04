@@ -4,10 +4,11 @@ import logging
 import math
 import os
 import shutil
-from datetime import timedelta
+from datetime import timedelta, datetime
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import accelerate
 import datasets
 import diffusers
@@ -33,7 +34,7 @@ from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 
-from data.thin_film_dataset import Crop
+from data.dataset_pmma import Crop
 from model.pipeline import ConditionalPipeline
 from model.unet import ConditionalUNet
 
@@ -348,6 +349,13 @@ def parse_args():
             "You must specify either a dataset name from the hub or a train data directory."
         )
 
+    # Generate a timestamp in the format YYYYMMDD-HHMMSS
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    # Create a new subfolder under args.output_dir with the generated timestamp
+    args.output_dir = os.path.join(args.output_dir, timestamp)
+    os.makedirs(args.output_dir, exist_ok=True)
+
     return args
 
 
@@ -554,28 +562,30 @@ def main(args):
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
-    if args.dataset_name is not None:
+    if args.dataset_name == "PMMA":
         dataset = load_dataset(
-            "data\\thin_film_dataset.py",
+            "data\\dataset_pmma.py",
             split="train",
         )
-    else:
+        dataset_test = load_dataset(
+            "data\\dataset_pmma.py",
+            split="test",
+        )
+    elif args.dataset_name == "PS":
         dataset = load_dataset(
-            "imagefolder",
-            data_dir=args.train_data_dir,
-            cache_dir=args.cache_dir,
+            "data\\dataset_ps.py",
             split="train",
         )
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
-
-    # BOM
-    top, left, height, width = 678, 0, 767, 2452
+        dataset_test = load_dataset(
+            "data\\dataset_ps.py",
+            split="test",
+        )
 
     # Preprocessing the datasets and DataLoaders creation.
+    crop_info = [int(v) for v in dataset.description.split(",")]
     augmentations = transforms.Compose(
         [
-            Crop(top, left, height, width),
+            Crop(*crop_info),
             transforms.Resize(
                 (args.resolution, args.resolution),
                 interpolation=transforms.InterpolationMode.BILINEAR,
@@ -584,18 +594,29 @@ def main(args):
             transforms.Normalize([0.5], [0.5]),
         ]
     )
+    augmentations_test = transforms.Compose(
+        [
+            Crop(*crop_info),
+            transforms.Resize(
+                (args.resolution, args.resolution),
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
+            transforms.ToTensor(),
+        ]
+    )
 
     def transform_images(examples):
-        # img = PIL.Image.open(self.filepaths[i])
-        # images = [augmentations(image.convert("RGB")) for image in examples["image"]]
         images = [augmentations(Image.open(image)) for image in examples["image"]]
-        # conditions = [condition for condition in examples['condition']]
+
+        return {"image": images, "condition": examples["condition"]}
+
+    def transform_images_test(examples):
+        images = [augmentations_test(Image.open(image)) for image in examples["image"]]
+
         return {"image": images, "condition": examples["condition"]}
 
     def collate_fn(examples):
         images = torch.stack([example["image"] for example in examples])
-
-        # print(len(examples), len(examples[0]["condition"]), examples[0]["condition"])
 
         conditions = torch.stack(
             [torch.Tensor(example["condition"]) for example in examples]
@@ -606,9 +627,18 @@ def main(args):
     logger.info(f"Dataset size: {len(dataset)}")
 
     dataset.set_transform(transform_images)
+    dataset_test.set_transform(transform_images_test)
+
     train_dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=args.train_batch_size,
+        collate_fn=collate_fn,
+        shuffle=True,
+        num_workers=args.dataloader_num_workers,
+    )
+    test_dataloader = torch.utils.data.DataLoader(
+        dataset_test,
+        batch_size=args.eval_batch_size,
         collate_fn=collate_fn,
         shuffle=True,
         num_workers=args.dataloader_num_workers,
@@ -623,8 +653,14 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    (
+        model,
+        optimizer,
+        train_dataloader,
+        test_dataloader,
+        lr_scheduler,
+    ) = accelerator.prepare(
+        model, optimizer, train_dataloader, test_dataloader, lr_scheduler
     )
 
     if args.use_ema:
@@ -685,6 +721,8 @@ def main(args):
             resume_step = resume_global_step % (
                 num_update_steps_per_epoch * args.gradient_accumulation_steps
             )
+
+    test_dataloader_iterator = iter(test_dataloader)
 
     # Train!
     for epoch in range(first_epoch, args.num_epochs):
@@ -840,20 +878,16 @@ def main(args):
                     scheduler=noise_scheduler,
                 )
 
-                # BOM - in case training batch size < validation batch size
-                if len(batch["condition"] < args.eval_batch_size):
-                    # Calculate the number of times the entire tensor needs to be repeated
-                    repeat_times = (
-                        args.eval_batch_size // batch["condition"].shape[0]
-                    ) + 1
-                    condition = batch["condition"].repeat(repeat_times, 1)
-                else:
-                    condition = batch["condition"]
+                try:
+                    test_batch = next(test_dataloader_iterator)
+                except StopIteration:
+                    test_dataloader_iterator = iter(test_dataloader)
+                    test_batch = next(test_dataloader_iterator)
 
                 generator = torch.Generator(device=pipeline.device).manual_seed(0)
                 # run pipeline in inference (sample random noise and denoise)
                 images = pipeline(
-                    condition=condition[: args.eval_batch_size],
+                    condition=test_batch["condition"],
                     generator=generator,
                     batch_size=args.eval_batch_size,
                     num_inference_steps=args.ddpm_num_inference_steps,
@@ -865,6 +899,14 @@ def main(args):
 
                 # denormalize the images and save to tensorboard
                 images_processed = (images * 255).round().astype("uint8")
+
+                batch_image = (
+                    (test_batch["image"].cpu().numpy() * 255).round().astype("uint8")
+                ).transpose(0, 2, 3, 1)
+
+                images_processed = np.concatenate(
+                    [images_processed, batch_image], axis=1
+                )
 
                 if args.logger == "tensorboard":
                     if is_accelerate_version(">=", "0.17.0.dev0"):
