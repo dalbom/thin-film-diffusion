@@ -33,14 +33,16 @@ class ThinFilmDataset(GeneratorBasedBuilder):
             {"image": Value("string"), "condition": Sequence(Value("float"))}
         )
 
-        return DatasetInfo(features=features)
+        return DatasetInfo(features=features, description="678,0,767,2452")
 
-    def _split_generators(self, dl_manager):
-        gt_path = "data\\thin_film.csv"
+    def _read_from_csv(self, filepath):
+        print(filepath)
+        data = pd.read_csv(filepath)
 
-        data = pd.read_csv(gt_path)
-        self.filepaths = data["filepath"]
-        self.measurements = np.stack(
+        filepaths = data["filepath"]
+
+        # Normalize measurements
+        measurements = np.stack(
             (
                 (data["x1"] - np.mean(data["x1"])) / np.std(data["x1"]),
                 (data["x2"] - np.mean(data["x2"])) / np.std(data["x2"]),
@@ -54,32 +56,35 @@ class ThinFilmDataset(GeneratorBasedBuilder):
             axis=1,
         )
 
-        # self.measurements = np.stack(
-        #     (
-        #         data["x1"],
-        #         data["x2"],
-        #         data["x3"],
-        #         data["x4"],
-        #         data["x5"],
-        #         data["x6"],
-        #         data["x7"],
-        #         data["x8"],
-        #     ),
-        #     axis=1,
-        # )
+        return filepaths, measurements
+
+    def _split_generators(self, dl_manager):
+        train_path = "data\\PMMA_train.csv"
+        test_path = "data\\PMMA_test.csv"
+
+        self.filepaths, self.measurements = self._read_from_csv(train_path)
+        self.filepaths_test, self.measurements_test = self._read_from_csv(test_path)
 
         return [
             SplitGenerator(
                 name=datasets.Split.TRAIN,
-                gen_kwargs={"index_range": [0, len(self.filepaths)]},
-            )
+                gen_kwargs={
+                    "filepaths": self.filepaths,
+                    "measurements": self.measurements,
+                },
+            ),
+            SplitGenerator(
+                name=datasets.Split.TEST,
+                gen_kwargs={
+                    "filepaths": self.filepaths_test,
+                    "measurements": self.measurements_test,
+                },
+            ),
         ]
 
-    def _generate_examples(self, index_range):
-        start, end = index_range
-
-        for i in range(start, end):
-            yield i - start, {
-                "image": self.filepaths[i],
-                "condition": self.measurements[i],
+    def _generate_examples(self, filepaths, measurements):
+        for i in range(len(filepaths)):
+            yield i, {
+                "image": filepaths[i],
+                "condition": measurements[i],
             }
