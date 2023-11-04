@@ -9,7 +9,7 @@ from transformers.optimization import get_scheduler
 from accelerate import Accelerator
 import os
 from torchvision import transforms
-from data.thin_film_dataset import Crop
+from data.dataset_pmma import Crop
 from PIL import Image
 from accelerate.utils import ProjectConfiguration
 import datetime
@@ -40,28 +40,35 @@ def get_dataloaders():
     # Define dataset, transformations, and batch_size
     # NOTE: You should have train_dataset defined from earlier
     batch_size = 32
-    thin_film_dataset = load_dataset(
-        "data\\thin_film_dataset.py",
+    train_valid_dataset = load_dataset(
+        "data\\dataset_pmma.py",
         split="train",
+    )
+    test_dataset = load_dataset(
+        "data\\dataset_pmma.py",
+        split="test",
+    )
+    inference_dataset = load_dataset(
+        "data\\dataset_pmma.py",
+        split="inference",
     )
 
     # Splitting the dataset
-    total_size = len(thin_film_dataset)
+    total_size = len(train_valid_dataset)
     train_size = int(0.8 * total_size)
-    valid_size = int(0.1 * total_size)
-    test_size = total_size - train_size - valid_size
-    train_subset, valid_subset, test_subset = random_split(
-        thin_film_dataset, [train_size, valid_size, test_size]
+    valid_size = total_size - train_size
+    train_dataset, valid_dataset = random_split(
+        train_valid_dataset, [train_size, valid_size]
     )
 
     # Apply transform
     resolution = 256
-    top, left, height, width = 678, 0, 767, 2452
+    crop_info = [int(v) for v in train_valid_dataset.description.split(",")]
 
     # Preprocessing the datasets and DataLoaders creation.
     augmentations = transforms.Compose(
         [
-            Crop(top, left, height, width),
+            Crop(*crop_info),
             transforms.Resize(
                 (resolution, resolution),
                 interpolation=transforms.InterpolationMode.BILINEAR,
@@ -70,9 +77,22 @@ def get_dataloaders():
             transforms.Normalize([0.5], [0.5]),
         ]
     )
+    augmentations_inference = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize([0.5], [0.5]),
+        ]
+    )
 
     def transform_images(examples):
         images = [augmentations(Image.open(image)) for image in examples["image"]]
+
+        return {"image": images, "condition": examples["condition"]}
+
+    def transform_images_inference(examples):
+        images = [
+            augmentations_inference(Image.open(image)) for image in examples["image"]
+        ]
 
         return {"image": images, "condition": examples["condition"]}
 
@@ -85,19 +105,24 @@ def get_dataloaders():
 
         return {"image": images, "condition": conditions}
 
-    thin_film_dataset.set_transform(transform_images)
+    train_valid_dataset.set_transform(transform_images)
+    test_dataset.set_transform(transform_images)
+    inference_dataset.set_transform(transform_images_inference)
 
     train_dataloader = DataLoader(
-        train_subset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True
+        train_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=True
     )
     valid_dataloader = DataLoader(
-        valid_subset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False
+        valid_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False
     )
     test_dataloader = DataLoader(
-        test_subset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False
+        test_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False
+    )
+    inference_dataloader = DataLoader(
+        inference_dataset, batch_size=batch_size, collate_fn=collate_fn, shuffle=False
     )
 
-    return train_dataloader, valid_dataloader, test_dataloader
+    return train_dataloader, valid_dataloader, test_dataloader, inference_dataloader
 
 
 # Hyperparameters
@@ -105,7 +130,12 @@ num_epochs = 100
 
 
 # Data loaders
-train_dataloader, valid_dataloader, test_dataloader = get_dataloaders()
+(
+    train_dataloader,
+    valid_dataloader,
+    test_dataloader,
+    inference_dataloader,
+) = get_dataloaders()
 
 # Use torchvision's resnet18
 model = resnet18(weights=None)  # Turn off pretrained
@@ -117,7 +147,7 @@ criterion = nn.MSELoss()
 optimizer = optim.AdamW(model.parameters(), lr=2e-5)
 
 current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-project_dir = f"results\\regression\\{current_time}"
+project_dir = f"results\\20231104-011749"
 logging_dir = os.path.join(project_dir, "logs")
 accelerator_project_config = ProjectConfiguration(
     project_dir=project_dir, logging_dir=logging_dir
@@ -142,6 +172,7 @@ lr_scheduler = get_scheduler(
     train_dataloader,
     valid_dataloader,
     test_dataloader,
+    inference_dataloader,
     criterion,
     lr_scheduler,
 ) = accelerator.prepare(
@@ -150,6 +181,7 @@ lr_scheduler = get_scheduler(
     train_dataloader,
     valid_dataloader,
     test_dataloader,
+    inference_dataloader,
     criterion,
     lr_scheduler,
 )
@@ -161,7 +193,10 @@ tracker = accelerator.get_tracker("tensorboard", unwrap=True)
 
 global_step = 0
 early_stopping = EarlyStopping(patience=10, threshold=1e-4)
-output_dir = "results\\regression"
+output_dir = "results\\20231104-011749\\regression"
+
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir)
 
 for epoch in range(num_epochs):
     model.train()
@@ -190,7 +225,7 @@ for epoch in range(num_epochs):
     model.eval()
     val_loss = 0.0
     with torch.no_grad():
-        for data in valid_dataloader:
+        for batch in valid_dataloader:
             model_input = batch["image"]
             gt = batch["condition"]
 
@@ -209,7 +244,7 @@ for epoch in range(num_epochs):
         test_loss = 0.0
 
         with torch.no_grad():
-            for data in test_dataloader:
+            for batch in test_dataloader:
                 model_input = batch["image"]
                 gt = batch["condition"]
 
@@ -220,8 +255,22 @@ for epoch in range(num_epochs):
         test_loss /= len(test_dataloader)
         accelerator.log({"loss/test": test_loss}, step=global_step)
 
+        inference_loss = 0.0
+
+        with torch.no_grad():
+            for batch in inference_dataloader:
+                model_input = batch["image"]
+                gt = batch["condition"]
+
+                model_output = model(model_input)
+                loss = criterion(model_output, gt)
+                inference_loss += loss.item()
+
+        inference_loss /= len(inference_dataloader)
+        accelerator.log({"loss/inference": inference_loss}, step=global_step)
+
         torch.save(
-            model.state_dict(), os.path.join(project_dir, f"epoch_{epoch+1:03d}.pth")
+            model.state_dict(), os.path.join(output_dir, f"epoch_{epoch+1:03d}.pth")
         )
 
 print("Finished Training")
