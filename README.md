@@ -13,6 +13,8 @@ For example, the combined csv file for the PMMA material will be generated at .\
 
 `python data\combine_data.py --material PMMA --path c:\dev\ThinFilm\PMMA`
 
+Uncomment `rename_files(dataset_path)` is recommended for the first time if you want the filenames to be '%04d.png'.
+
 Note that I manually removed '(0.001)' at the end of each directory in the PS dataset because it is a redundant information.
 
 Then you can generate train/test splits for the dataset using this command:
@@ -20,6 +22,8 @@ Then you can generate train/test splits for the dataset using this command:
 `python data\split_dataset.py --csv_path data\MATERIAL.csv`
 
 # Training
+
+## Diffusion model
 
 > The following codes and scripts are tested in Windows environment. Modify them accordingly if you use Linux.
 
@@ -49,8 +53,24 @@ Then you can generate train/test splits for the dataset using this command:
 
 5. Launch the training script
 
-    `.\run_diffusion_training.bat`
+    `.\run_diffusers.bat`
 
 6. Launch the tensorboard to monitor the training process
 
     `tensorboard --logdir results\`
+
+## Regression model
+
+Argument parsing is not implemented yet. Please modify the path to the generated images at a relevant dataset class definition. After then, training a regression model can be initiated using:
+
+`python train_regression.py`
+
+# Inference
+
+## Diffusion model
+
+In order to generate synthetic thin film images from a list of parameters, you can run the following script:
+
+`.\run_inference.bat`
+
+The checkpoint of the diffusion model should be delivered within the script using --ckpt argument.
